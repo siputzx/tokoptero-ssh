@@ -1,50 +1,66 @@
-name: Build
+name: Build and Release
 
 on:
   push:
-    branches: [ "master" ]
+    branches: ["master"]
+    tags: ["v*"]
   release:
     types: [published]
 
 permissions:
   contents: write
-  
+
 jobs:
   build:
     runs-on: ubuntu-latest
-
     strategy:
       matrix:
         include:
-          - arch: amd64
-            distro: ubuntu_latest
-          - arch: arm64
-            distro: ubuntu_latest
-          - arch: riscv64
-            distro: ubuntu_latest
-
+          - goarch: amd64
+            goos: linux
+            binary_suffix: amd64
+          - goarch: arm64
+            goos: linux
+            binary_suffix: arm64
+          - goarch: riscv64
+            goos: linux
+            binary_suffix: riscv64
 
     steps:
       - uses: actions/checkout@v4
+
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.25.x'
+          go-version: "1.25.x"
+
       - name: Install dependencies
-        run: go get ./...
-      - name: Build fully static artifact
+        run: go mod download
+
+      - name: Build static binary
         run: |
-          CGO_ENABLED=0 GOOS=linux GOARCH=${{ matrix.arch }} go build -ldflags="-s -w" -o ssh-${{ matrix.arch }} ./cmd/ssh-server
-      - name: Upload Build Artifact
+          CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
+            go build -ldflags="-s -w -X main.version=${{ github.ref_name }}" \
+            -o ssh-server-${{ matrix.binary_suffix }} \
+            ./cmd/ssh-server
+
+      - name: Generate checksum
+        run: sha256sum ssh-server-${{ matrix.binary_suffix }} > ssh-server-${{ matrix.binary_suffix }}.sha256
+
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ssh-${{ matrix.arch }}
-          path: ssh-${{ matrix.arch }}
-      - name: Upload Release Asset
+          name: ssh-server-${{ matrix.binary_suffix }}
+          path: |
+            ssh-server-${{ matrix.binary_suffix }}
+            ssh-server-${{ matrix.binary_suffix }}.sha256
+
+      - name: Upload to release
         if: github.event_name == 'release' && github.event.action == 'published'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          export TAG_NAME="${{ github.event.release.tag_name }}"
-          export REF_NAME="${{ github.ref_name }}"
-          gh release upload $TAG_NAME ./ssh-${{ matrix.arch }}
+          gh release upload ${{ github.event.release.tag_name }} \
+            ssh-server-${{ matrix.binary_suffix }} \
+            ssh-server-${{ matrix.binary_suffix }}.sha256 \
+            --clobber

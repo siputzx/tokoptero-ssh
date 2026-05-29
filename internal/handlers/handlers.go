@@ -14,7 +14,7 @@ import (
 	"github.com/pkg/sftp"
 )
 
-// SFTPHandler handles SFTP sessions
+// SFTPHandler handles SFTP sessions (legacy, no root restriction)
 func SFTPHandler(sess ssh.Session) {
 	debugStream := io.Discard
 	serverOptions := []sftp.ServerOption{
@@ -30,6 +30,36 @@ func SFTPHandler(sess ssh.Session) {
 		color.Green("sftp client exited session.")
 	} else if err != nil {
 		color.Red("sftp server completed with error: %s", err)
+	}
+}
+
+// SFTPHandlerWithRoot returns a handler that restricts SFTP to a specific root directory
+func SFTPHandlerWithRoot(root string) ssh.SubsystemHandler {
+	// Ensure root exists
+	os.MkdirAll(root, 0755)
+
+	return func(sess ssh.Session) {
+		debugStream := io.Discard
+		serverOptions := []sftp.ServerOption{
+			sftp.WithDebug(debugStream),
+		}
+
+		// Restrict SFTP to specified root directory
+		if root != "" {
+			serverOptions = append(serverOptions, sftp.WithServerWorkingDirectory(root))
+		}
+
+		server, err := sftp.NewServer(sess, serverOptions...)
+		if err != nil {
+			color.Red("sftp server init error: %s", err)
+			return
+		}
+		if err := server.Serve(); err == io.EOF {
+			server.Close()
+			color.Green("sftp client exited session.")
+		} else if err != nil {
+			color.Red("sftp server completed with error: %s", err)
+		}
 	}
 }
 

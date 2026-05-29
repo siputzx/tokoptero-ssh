@@ -1,6 +1,8 @@
 package config
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,16 +12,18 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Config represents the YAML configuration structure
 type Config struct {
 	SSH struct {
-		Port     string `yaml:"port"`
-		User     string `yaml:"user"`
-		Password string `yaml:"password"`
-		Timeout  int    `yaml:"timeout"`
+		Port           string `yaml:"port"`
+		User           string `yaml:"user"`
+		Password       string `yaml:"password"`
+		AuthorizedKeys string `yaml:"authorized_keys"`
+		Timeout        int    `yaml:"timeout"`
+		MaxRetries     int    `yaml:"max_retries"`
 	} `yaml:"ssh"`
 	SFTP struct {
-		Enable bool `yaml:"enable"`
+		Enable bool   `yaml:"enable"`
+		Root   string `yaml:"root"`
 	} `yaml:"sftp"`
 }
 
@@ -35,16 +39,17 @@ func checkWritePermission(dir string) error {
 	return nil
 }
 
-func init() {
-	// Try to use root directory first
-	configPath = filepath.Join("/", "ssh_config.yml")
+func generateRandomPassword() string {
+	b := make([]byte, 16)
+	rand.Read(b)
+	return hex.EncodeToString(b)
+}
 
-	// Check if we have permission to write to root directory
+func init() {
+	configPath = filepath.Join("/", "ssh_config.yml")
 	if err := checkWritePermission("/"); err != nil {
-		// Fallback to home directory if no permission in root
 		homeDir, err := os.UserHomeDir()
 		if err != nil {
-			// Fallback to current directory if home directory cannot be determined
 			homeDir = "/"
 		}
 		configPath = filepath.Join(homeDir, "ssh_config.yml")
@@ -56,23 +61,26 @@ func CreateDefaultConfig() error {
 	defaultConfig := Config{}
 	defaultConfig.SSH.Port = "2222"
 	defaultConfig.SSH.User = "root"
-	defaultConfig.SSH.Password = "password"
+	defaultConfig.SSH.Password = generateRandomPassword() // Random, not "password"!
 	defaultConfig.SSH.Timeout = 300
+	defaultConfig.SSH.MaxRetries = 5
 	defaultConfig.SFTP.Enable = true
+	defaultConfig.SFTP.Root = ""
 
 	yamlData, err := yaml.Marshal(&defaultConfig)
 	if err != nil {
 		return err
 	}
 
-	return os.WriteFile(configPath, yamlData, 0644)
+	color.Yellow("Generated random password. Save it before closing this terminal!")
+	color.Yellow("Password: %s", defaultConfig.SSH.Password)
+
+	return os.WriteFile(configPath, yamlData, 0600) // 0600 instead of 0644 for security
 }
 
-// LoadConfig loads the configuration from the YAML file
 func LoadConfig() (*Config, error) {
 	cfg := &Config{}
 
-	// Check if config file exists, create if not
 	_, err := os.Stat(configPath)
 	if os.IsNotExist(err) {
 		color.Yellow("Configuration file not found. Creating default config at %s", configPath)
@@ -85,14 +93,12 @@ func LoadConfig() (*Config, error) {
 		return nil, err
 	}
 
-	// Read the config file
 	content, err := os.ReadFile(configPath)
 	if err != nil {
 		color.Red("Error reading config file: %v", err)
 		return nil, err
 	}
 
-	// Parse YAML into config struct
 	if err := yaml.Unmarshal(content, cfg); err != nil {
 		color.Red("Error parsing config: %v", err)
 		return nil, err
@@ -101,27 +107,20 @@ func LoadConfig() (*Config, error) {
 	return cfg, nil
 }
 
-// IsBcryptHash detects if a string is a bcrypt hash
 func IsBcryptHash(str string) bool {
 	return len(str) > 0 && (strings.HasPrefix(str, "$2a$") ||
 		strings.HasPrefix(str, "$2b$") ||
 		strings.HasPrefix(str, "$2y$"))
 }
 
-// CheckPassword checks password - handles both bcrypt, argon2 and plaintext
 func CheckPassword(storedPassword, inputPassword string) bool {
-	// If it looks like an argon2 hash, use argon2 comparison
 	if IsArgon2Hash(storedPassword) {
 		match, err := ComparePasswordAndHash(inputPassword, storedPassword)
 		return err == nil && match
 	}
-
-	// If it looks like a bcrypt hash, use bcrypt comparison
 	if IsBcryptHash(storedPassword) {
 		err := bcrypt.CompareHashAndPassword([]byte(storedPassword), []byte(inputPassword))
 		return err == nil
 	}
-
-	// Otherwise, use plain text comparison
 	return storedPassword == inputPassword
 }

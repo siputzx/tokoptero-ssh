@@ -1,4 +1,4 @@
-module ssh
+module github.com/siputzx/tokoptero-ssh
 
 go 1.25.1
 
